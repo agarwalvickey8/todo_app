@@ -1,20 +1,23 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
     Container, Heading, Input, Button, List, ListItem, IconButton, HStack, Text,
     Spinner, Alert, AlertIcon, useToast, Checkbox, Modal, ModalOverlay, ModalContent,
     ModalHeader, ModalFooter, ModalBody, ModalCloseButton, useDisclosure, AlertDialog,
-    AlertDialogBody, AlertDialogFooter, AlertDialogHeader, AlertDialogContent, AlertDialogOverlay,
+    AlertDialogBody, AlertDialogFooter, AlertDialogHeader, AlertDialogContent, AlertDialogOverlay, Box,
 } from '@chakra-ui/react';
-import { DeleteIcon, EditIcon } from '@chakra-ui/icons';
-import React from "react";
+import { DeleteIcon, EditIcon, DragHandleIcon } from '@chakra-ui/icons';
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 interface Todo {
     _id: string;
     text: string;
     completed: boolean;
+    order: number;
 }
 
 const fetchTodos = async (): Promise<Todo[]> => {
@@ -33,14 +36,13 @@ const addTodo = async (text: string): Promise<Todo> => {
     return res.json();
 };
 
-const updateTodo = async (updatedTodo: Partial<Todo> & { _id: string }): Promise<Todo> => {
+const updateTodo = async (updatedTodo: Partial<Todo> & { _id: string }): Promise<void> => {
     const res = await fetch('/api/todos', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedTodo),
     });
     if (!res.ok) throw new Error('Failed to update todo');
-    return res.json();
 };
 
 const deleteTodo = async (_id: string): Promise<void> => {
@@ -52,6 +54,53 @@ const deleteTodo = async (_id: string): Promise<void> => {
     if (!res.ok) throw new Error('Failed to delete todo');
 };
 
+function TodoItem({ todo, onToggleComplete, onEdit, onDelete }: { todo: Todo, onToggleComplete: any, onEdit: any, onDelete: any }) {
+    const {
+        attributes,
+        listeners,
+        setNodeRef,
+        transform,
+        transition,
+    } = useSortable({ id: todo._id });
+
+    const style = {
+        transform: CSS.Transform.toString(transform),
+        transition,
+    };
+
+    return (
+        <ListItem
+            ref={setNodeRef}
+            style={style}
+            display="flex"
+            alignItems="center"
+            p={4}
+            bg="gray.100"
+            borderRadius="md"
+            opacity={transform ? 0.8 : 1}
+            boxShadow={transform ? 'lg' : 'none'}
+        >
+            <Box {...attributes} {...listeners} mr={4} cursor="grab" touchAction="none">
+                <DragHandleIcon />
+            </Box>
+            <Checkbox
+                isChecked={todo.completed}
+                onChange={() => onToggleComplete(todo)}
+                mr={4}
+                colorScheme="blue"
+                size="lg"
+            />
+            <Text as={todo.completed ? 's' : 'span'} color={todo.completed ? 'gray.500' : 'inherit'} flex="1">
+                {todo.text}
+            </Text>
+            <HStack spacing={2}>
+                <IconButton aria-label="Edit todo" icon={<EditIcon />} variant="ghost" onClick={() => onEdit(todo)} />
+                <IconButton aria-label="Delete todo" icon={<DeleteIcon />} variant="ghost" colorScheme="red" onClick={() => onDelete(todo._id)} />
+            </HStack>
+        </ListItem>
+    );
+}
+
 export default function Home() {
     const [newTodo, setNewTodo] = useState('');
     const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
@@ -60,16 +109,16 @@ export default function Home() {
     
     const { isOpen: isEditModalOpen, onOpen: onEditModalOpen, onClose: onEditModalClose } = useDisclosure();
     const { isOpen: isDeleteAlertOpen, onOpen: onDeleteAlertOpen, onClose: onDeleteAlertClose } = useDisclosure();
-    const cancelRef = React.useRef(null);
-
+    const cancelRef = useRef(null);
     const queryClient = useQueryClient();
     const toast = useToast();
 
     const { data: todos, isLoading, isError, error } = useQuery<Todo[], Error>({
         queryKey: ['todos'],
         queryFn: fetchTodos,
+        select: (data) => (data ? data.sort((a, b) => a.order - b.order) : []),
     });
-
+    
     const addMutation = useMutation({
         mutationFn: addTodo,
         onSuccess: () => {
@@ -128,6 +177,24 @@ export default function Home() {
             onEditModalClose();
         }
     };
+
+    const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 }}));
+    const todoIds = useMemo(() => todos?.map(todo => todo._id) || [], [todos]);
+
+    const handleDragEnd = (event: any) => {
+        const { active, over } = event;
+        if (over && active.id !== over.id && todos) {
+            const oldIndex = todoIds.indexOf(active.id);
+            const newIndex = todoIds.indexOf(over.id);
+            const reorderedTodos = arrayMove(todos, oldIndex, newIndex);
+            queryClient.setQueryData(['todos'], reorderedTodos);
+            reorderedTodos.forEach((item, index) => {
+                if (item.order !== index) {
+                    updateMutation.mutate({ _id: item._id, order: index });
+                }
+            });
+        }
+    };
     
     if (isLoading) {
         return (
@@ -172,44 +239,22 @@ export default function Home() {
                         Add
                     </Button>
                 </HStack>
-
-                <List spacing={3} w="100%">
-                    {todos?.map((todo) => (
-                        <ListItem
-                            key={todo._id}
-                            display="flex"
-                            alignItems="center"
-                            p={4}
-                            bg="gray.100"
-                            borderRadius="md"
-                        >
-                            <Checkbox
-                                isChecked={todo.completed}
-                                onChange={() => handleToggleComplete(todo)}
-                                mr={4}
-                                colorScheme="blue"
-                            />
-                            <Text as={todo.completed ? 's' : 'span'} color={todo.completed ? 'gray.500' : 'inherit'} flex="1">
-                                {todo.text}
-                            </Text>
-                            <HStack spacing={2}>
-                                <IconButton
-                                    aria-label="Edit todo"
-                                    icon={<EditIcon />}
-                                    variant="ghost"
-                                    onClick={() => openEditModal(todo)}
+                
+                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                    <SortableContext items={todoIds} strategy={verticalListSortingStrategy}>
+                        <List spacing={3} w="100%">
+                            {todos?.map((todo) => (
+                                <TodoItem
+                                    key={todo._id}
+                                    todo={todo}
+                                    onToggleComplete={handleToggleComplete}
+                                    onEdit={openEditModal}
+                                    onDelete={openDeleteConfirm}
                                 />
-                                <IconButton
-                                    aria-label="Delete todo"
-                                    icon={<DeleteIcon />}
-                                    variant="ghost"
-                                    colorScheme="red"
-                                    onClick={() => openDeleteConfirm(todo._id)}
-                                />
-                            </HStack>
-                        </ListItem>
-                    ))}
-                </List>
+                            ))}
+                        </List>
+                    </SortableContext>
+                </DndContext>
             </Container>
 
             <Modal isOpen={isEditModalOpen} onClose={onEditModalClose}>
@@ -240,7 +285,7 @@ export default function Home() {
                             Delete Todo
                         </AlertDialogHeader>
                         <AlertDialogBody>
-                            Are you sure? You want to delete this task.
+                            Are you sure? You can't undo this action afterwards.
                         </AlertDialogBody>
                         <AlertDialogFooter>
                             <Button ref={cancelRef} onClick={onDeleteAlertClose}>

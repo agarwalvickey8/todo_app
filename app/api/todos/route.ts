@@ -24,12 +24,11 @@ export async function POST(request: Request) {
         if (!text) {
             return new NextResponse('Text is required', { status: 400 });
         }
-        
-        const newTodo = { text, completed: false };
         const todosCollection = await getTodosCollection();
+        const count = await todosCollection.countDocuments();
+        const newTodo = { text, completed: false, order: count };
         const result = await todosCollection.insertOne(newTodo);
         const createdTodo = await todosCollection.findOne({ _id: result.insertedId });
-        
         return NextResponse.json(createdTodo, { status: 201 });
     } catch (e) {
         console.error("Error creating todo:", e);
@@ -39,18 +38,18 @@ export async function POST(request: Request) {
 
 export async function PUT(request: Request) {
     try {
-        const { _id, text, completed } = await request.json();
+        const { _id, ...fieldsToUpdate } = await request.json();
+        if (!_id) {
+            return new NextResponse('ID is required', { status: 400 });
+        }
         const todosCollection = await getTodosCollection();
-        
         const result = await todosCollection.updateOne(
             { _id: new ObjectId(_id) },
-            { $set: { text, completed } }
+            { $set: fieldsToUpdate }
         );
-            
         if (result.matchedCount === 0) {
             return new NextResponse('Todo not found', { status: 404 });
         }
-            
         return NextResponse.json({ message: "Todo updated successfully" });
     } catch (e) {
         return new NextResponse('Error updating todo', { status: 500 });
